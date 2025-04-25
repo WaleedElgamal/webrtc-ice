@@ -1,62 +1,73 @@
-const io = require('socket.io')(server);
+const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
+const path = require('path');
+const cors = require('cors');
 
-// Store peers by socket ID
-let peers = {};
+const app = express();
+app.use(express.static(path.join(__dirname, 'public')));
 
-io.on('connection', socket => {
-  console.log('A user connected: ' + socket.id);
-  
-  // Register the user with their socket ID
-  peers[socket.id] = socket;
 
-  // When a user wants to call another peer
-  socket.on('call-user', () => {
-    console.log(`Call request from ${socket.id}`);
+const server = http.createServer(app);
+const io = socketIo(server);
 
-    // Check if there's another peer to connect with
-    let otherPeer = null;
-    for (let id in peers) {
-      if (id !== socket.id) {
-        otherPeer = peers[id];
-        break;
-      }
-    }
+let activePeers = new Set();
 
-    if (otherPeer) {
-      // Emit the incoming call event to the other peer
-      otherPeer.emit('incoming-call', { from: socket.id });
-    } else {
-      // If no peer is available, emit 'no-peer'
-      socket.emit('no-peer');
-    }
-  });
+io.on('connection', (socket) => {
+    console.log('New client connected:', socket.id);
+    activePeers.add(socket.id);
+    
+    // Notify other peers about new connection
+    socket.broadcast.emit('peer-active');
+    
+    socket.on('check-peer', () => {
+        if (activePeers.size > 1) {
+            socket.emit('peer-active');
+            console.log(`${socket.id}: Peer available`);
+        } else {
+            socket.emit('no-peer');
+            console.log(`${socket.id}: No peer available`);
+        }
+    });
+    
+    socket.on('offer', (offer) => {
+        console.log(`Offer received from ${socket.id}`);
+        socket.broadcast.emit('offer', offer);
+    });
+    
+    socket.on('answer', (answer) => {
+        console.log(`Answer received from ${socket.id}`);
+        socket.broadcast.emit('answer', answer);
+    });
+    
+    socket.on('ice-candidate', (candidate) => {
+        console.log(`ICE candidate from ${socket.id}: ${candidate.candidate}`);
+        socket.broadcast.emit('ice-candidate', candidate);
+    });
+    
+   socket.on('hangup', () => {
+    console.log(`${socket.id} hung up`);
+    socket.broadcast.emit('hangup');  // Make sure this is broadcast to all
+});
+    
+    socket.on('reject-call', () => {
+        console.log(`${socket.id} rejected call`);
+        socket.broadcast.emit('call-rejected');
+    });
+    
+    socket.on('disconnect', () => {
+        console.log('Client disconnected:', socket.id);
+        activePeers.delete(socket.id);
+        
+        if (activePeers.size > 0) {
+            io.emit('peer-active');
+        } else {
+            io.emit('no-peer');
+        }
+    });
+});
 
-  // Handle call acceptance
-  socket.on('call-accepted', ({ to }) => {
-    peers[to].emit('start-webrtc', { from: socket.id });
-  });
-
-  // Handle call rejection
-  socket.on('call-rejected', ({ to }) => {
-    peers[to].emit('call-ended');
-  });
-
-  // Handle offer and answer events
-  socket.on('offer', offer => {
-    peers[offer.to].emit('offer', offer);
-  });
-
-  socket.on('answer', answer => {
-    peers[answer.to].emit('answer', answer);
-  });
-
-  // Handle ICE candidates
-  socket.on('ice-candidate', candidate => {
-    peers[candidate.to].emit('ice-candidate', candidate);
-  });
-
-  // Handle user disconnection
-  socket.on('disconnect', () => {
-    delete peers[socket.id];
-  });
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
 });
