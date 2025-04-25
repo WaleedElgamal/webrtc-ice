@@ -1,46 +1,62 @@
-const express = require('express');
-const http = require('http');
-const socketIo = require('socket.io');
-const path = require('path');
+const io = require('socket.io')(server);
 
-const app = express();
-const server = http.createServer(app);
-const io = socketIo(server);
+// Store peers by socket ID
+let peers = {};
 
-app.use(express.static(path.join(__dirname, 'public')));
+io.on('connection', socket => {
+  console.log('A user connected: ' + socket.id);
+  
+  // Register the user with their socket ID
+  peers[socket.id] = socket;
 
-io.on('connection', (socket) => {
-  console.log('Client connected:', socket.id);
-
-  socket.on('join', room => {
-    socket.join(room);
-    socket.room = room;
-  });
-
+  // When a user wants to call another peer
   socket.on('call-user', () => {
-    socket.to(socket.room).emit('incoming-call', { from: socket.id });
+    console.log(`Call request from ${socket.id}`);
+
+    // Check if there's another peer to connect with
+    let otherPeer = null;
+    for (let id in peers) {
+      if (id !== socket.id) {
+        otherPeer = peers[id];
+        break;
+      }
+    }
+
+    if (otherPeer) {
+      // Emit the incoming call event to the other peer
+      otherPeer.emit('incoming-call', { from: socket.id });
+    } else {
+      // If no peer is available, emit 'no-peer'
+      socket.emit('no-peer');
+    }
   });
 
-  socket.on('call-accepted', () => {
-    socket.to(socket.room).emit('start-webrtc');
+  // Handle call acceptance
+  socket.on('call-accepted', ({ to }) => {
+    peers[to].emit('start-webrtc', { from: socket.id });
   });
 
-  socket.on('offer', data => {
-    socket.to(socket.room).emit('offer', data);
+  // Handle call rejection
+  socket.on('call-rejected', ({ to }) => {
+    peers[to].emit('call-ended');
   });
 
-  socket.on('answer', data => {
-    socket.to(socket.room).emit('answer', data);
+  // Handle offer and answer events
+  socket.on('offer', offer => {
+    peers[offer.to].emit('offer', offer);
   });
 
-  socket.on('ice-candidate', data => {
-    socket.to(socket.room).emit('ice-candidate', data);
+  socket.on('answer', answer => {
+    peers[answer.to].emit('answer', answer);
   });
 
+  // Handle ICE candidates
+  socket.on('ice-candidate', candidate => {
+    peers[candidate.to].emit('ice-candidate', candidate);
+  });
+
+  // Handle user disconnection
   socket.on('disconnect', () => {
-    socket.to(socket.room).emit('user-disconnected', socket.id);
+    delete peers[socket.id];
   });
 });
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
