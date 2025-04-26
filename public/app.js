@@ -3,11 +3,6 @@ const socket = io();
 const configuration = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302'},
-       {
-        urls: 'turn:numb.viagenie.ca',
-        username: 'webrtc@live.com',
-        credential: 'muazkh'
-       },
     ],
     iceCandidatePoolSize: 8,
     iceTransportPolicy: 'all'
@@ -172,7 +167,6 @@ function setupSocketListeners() {
         statusDiv.textContent = 'Remote peer ended the call';
         statusDiv.className = 'error';
 
-        // Reinitialize media (optional)
         initMedia();
     });
 }
@@ -181,6 +175,25 @@ function setupSocketListeners() {
 function createPeerConnection() {
     addLog("Creating new peer connection");
     peerConnection = new RTCPeerConnection(configuration);
+  
+   setInterval(async () => {
+        if (peerConnection.iceConnectionState === 'connected') {
+            const stats = await peerConnection.getStats();
+            stats.forEach(report => {
+                if (report.type === 'candidate-pair' && report.nominated) {
+                    const localCandidate = stats.get(report.localCandidateId);
+                    const remoteCandidate = stats.get(report.remoteCandidateId);
+                    
+                    addLog(`ACTIVE CONNECTION:
+                    Local Candidate:  ${localCandidate.address}:${localCandidate.port} (${localCandidate.candidateType})
+                    Remote Candidate: ${remoteCandidate.address}:${remoteCandidate.port} (${remoteCandidate.candidateType})
+                    Protocol: ${localCandidate.protocol}
+                    Packets Sent: ${report.packetsSent}
+                    Round-Trip Time: ${report.currentRoundTripTime}s`);
+                }
+            });
+        }
+    }, 2000);
     
     // Add local stream to connection
     localStream.getTracks().forEach(track => {
@@ -231,8 +244,7 @@ function createPeerConnection() {
         
         if (state === 'failed' || state === 'disconnected') {
             addLog("ICE connection failed, attempting restart...");
-            // Could add ICE restart logic here
-        }
+            peerConnection.restartIce();}
     };
     
     peerConnection.onicegatheringstatechange = () => {
@@ -332,7 +344,7 @@ function rejectCall() {
     statusDiv.textContent = 'Call rejected';
 }
 
-// Modify the hangUp function:
+// Hangup the call:
 function hangUp() {
     addLog("Hanging up call...");
   
@@ -380,7 +392,6 @@ function hangUp() {
     initMedia();
 }
 
-// Add this new function:
 async function initMedia() {
     try {
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
